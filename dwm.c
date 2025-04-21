@@ -86,6 +86,8 @@ typedef struct Monitor Monitor;
 typedef struct Client Client;
 struct Client {
 	char name[256];
+	char class[256];
+	char instance[256];
 	float mina, maxa;
 	int x, y, w, h;
 	int oldx, oldy, oldw, oldh;
@@ -253,8 +255,8 @@ static int xerror(Display *dpy, XErrorEvent *ee);
 static int xerrordummy(Display *dpy, XErrorEvent *ee);
 static int xerrorstart(Display *dpy, XErrorEvent *ee);
 static void zoom(const Arg *arg);
-
-
+static void togglescratch(const Arg *arg);
+static void updateclass(Client *c);
 /* variables */
 static const char broken[] = "broken";
 static char stext[256];
@@ -295,7 +297,7 @@ static Window root, wmcheckwin;
 
 /* compile-time check if all tags fit into an unsigned int bit array. */
 struct NumTags { char limitexceeded[LENGTH(tags) > 31 ? -1 : 1]; };
-
+static unsigned int scratchtag = 1 << LENGTH(tags);
 /* function implementations */
 void
 applyrules(Client *c)
@@ -1095,6 +1097,9 @@ manage(Window w, XWindowAttributes *wa)
 	c->oldbw = wa->border_width;
 
 	updatetitle(c);
+	updateclass(c);
+
+	
 	if (XGetTransientForHint(dpy, w, &trans) && (t = wintoclient(trans))) {
 		c->mon = t->mon;
 		c->tags = t->tags;
@@ -1110,6 +1115,21 @@ manage(Window w, XWindowAttributes *wa)
 	c->x = MAX(c->x, c->mon->wx);
 	c->y = MAX(c->y, c->mon->wy);
 	c->bw = borderpx;
+
+	selmon->tagset[selmon->seltags] &= ~scratchtag;
+	if (!strcmp(c->name, scratchpadname) || !strcmp(c->class, "scratchpad")) {
+		c->mon->tagset[c->mon->seltags] |= c->tags = scratchtag;
+		c->isfloating = True;
+	
+		int w = c->mon->mw * 0.6;
+		int h = c->mon->mh * 0.6;
+	
+		c->w = w;
+		c->h = h;
+		c->x = c->mon->mx + (c->mon->mw - w) / 2;
+		c->y = c->mon->my + (c->mon->mh - h) / 2;
+	}
+	
 
 	wc.border_width = c->bw;
 	XConfigureWindow(dpy, w, CWBorderWidth, &wc);
@@ -1372,6 +1392,33 @@ recttomon(int x, int y, int w, int h)
 		}
 	return r;
 }
+
+void
+updateclass(Client *c)
+{
+	XClassHint ch = { NULL, NULL };
+
+	if (XGetClassHint(dpy, c->win, &ch)) {
+		if (ch.res_class)
+			strncpy(c->class, ch.res_class, sizeof(c->class) - 1);
+		else
+			c->class[0] = '\0';
+
+		if (ch.res_name)
+			strncpy(c->instance, ch.res_name, sizeof(c->instance) - 1);
+		else
+			c->instance[0] = '\0';
+
+		if (ch.res_class)
+			XFree(ch.res_class);
+		if (ch.res_name)
+			XFree(ch.res_name);
+	} else {
+		c->class[0] = c->instance[0] = '\0';
+	}
+}
+
+
 
 void
 resize(Client *c, int x, int y, int w, int h, int interact)
@@ -1857,6 +1904,7 @@ spawn(const Arg *arg)
 
 	if (arg->v == dmenucmd)
 		dmenumon[0] = '0' + selmon->num;
+	selmon->tagset[selmon->seltags] &= ~scratchtag;
 	if (fork() == 0) {
 		if (dpy)
 			close(ConnectionNumber(dpy));
@@ -1953,6 +2001,29 @@ togglefloating(const Arg *arg)
 			selmon->sel->w, selmon->sel->h, 0);
 	arrange(selmon);
 }
+
+void
+togglescratch(const Arg *arg)
+{
+	Client *c;
+	unsigned int found = 0;
+
+	for (c = selmon->clients; c && !(found = c->tags & scratchtag); c = c->next);
+	if (found) {
+		unsigned int newtagset = selmon->tagset[selmon->seltags] ^ scratchtag;
+		if (newtagset) {
+			selmon->tagset[selmon->seltags] = newtagset;
+			focus(NULL);
+			arrange(selmon);
+		}
+		if (ISVISIBLE(c)) {
+			focus(c);
+			restack(selmon);
+		}
+	} else
+		spawn(arg);
+}
+
 
 void
 toggletag(const Arg *arg)
